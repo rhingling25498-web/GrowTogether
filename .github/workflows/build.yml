@@ -14,7 +14,7 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
-      - name: Checkout Source Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js 20
@@ -33,7 +33,7 @@ jobs:
           set -e
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name "sdkmanager" -type f 2>/dev/null | sort -V | tail -n 1)
           if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found under $ANDROID_HOME/cmdline-tools"
+            echo "Error: sdkmanager not found under $ANDROID_HOME/cmdline-tools"
             exit 1
           fi
           SDKMANAGER_DIR=$(dirname "$SDKMANAGER")
@@ -47,8 +47,39 @@ jobs:
 
           "$SDKMANAGER" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Install NPM Dependencies & Sync Capacitor Android
+      - name: Extract Uploaded Zip & Locate Project
         run: |
+          set -e
+          mkdir -p _extracted_src
+
+          # Find any uploaded .zip file in repo (excluding hidden/node_modules/_extracted_src)
+          ZIP_FILE=$(find . -maxdepth 3 -name "*.zip" -not -path "./_extracted_src/*" -not -path "*/node_modules/*" | head -n 1)
+
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found zip file: $ZIP_FILE"
+            unzip -q -o "$ZIP_FILE" -d _extracted_src
+            SEARCH_ROOT="_extracted_src"
+          else
+            echo "No zip file found; searching directly in repository."
+            SEARCH_ROOT="."
+          fi
+
+          # Locate package.json inside extracted zip or repo
+          PKG_JSON=$(find "$SEARCH_ROOT" -maxdepth 4 -name "package.json" -not -path "*/node_modules/*" | head -n 1)
+          if [ -z "$PKG_JSON" ]; then
+            echo "Error: package.json not found!"
+            find "$SEARCH_ROOT" -maxdepth 3
+            exit 1
+          fi
+
+          PROJECT_DIR=$(cd "$(dirname "$PKG_JSON")" && pwd)
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using project directory: $PROJECT_DIR"
+
+      - name: Install Dependencies & Sync Capacitor Android
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
           npm install
           if [ ! -d "android" ]; then
             npx cap add android
@@ -56,8 +87,9 @@ jobs:
           npx cap sync android
 
       - name: Build Debug APK with Gradle
-        working-directory: android
         run: |
+          set -e
+          cd "$PROJECT_DIR/android"
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
@@ -65,5 +97,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Grow-Together-Debug-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: "**/app/build/outputs/apk/debug/app-debug.apk"
           if-no-files-found: error
